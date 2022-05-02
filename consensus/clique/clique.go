@@ -615,12 +615,14 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if _, authorized := snap.Signers[signer]; !authorized {
 		return errUnauthorizedSigner
 	}
-	log.Info("Seal snap.Recents", snap.Recents)
+        log.Info("Seal check recent signers...", "number", number)
 	// If we're amongst the recent signers, wait for the next block
 	for seen, recent := range snap.Recents {
+                log.Info("Seal signer seen recent", "signer", signer, "seen", seen, "recent", recent)
 		if recent == signer {
 			// Signer is among recents, only wait if the current block doesn't shift it out
 			if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
+                                log.Info("signed recently", "limit", limit, );
 				return errors.New("signed recently, must wait for others")
 			}
 		}
@@ -632,7 +634,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		wiggle := time.Duration(len(snap.Signers)/2+1) * wiggleTime
 		delay += time.Duration(rand.Int63n(int64(wiggle)))
 
-		log.Trace("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggle))
+		log.Info("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggle))
 	}
 	// Sign all the things!
 	sighash, err := signFn(accounts.Account{Address: signer}, accounts.MimetypeClique, CliqueRLP(header))
@@ -641,8 +643,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	}
 	copy(header.Extra[len(header.Extra)-extraSeal:], sighash)
 	// Wait until sealing is terminated or delay timeout.
-	log.Info("Seal --> 2")
-	log.Trace("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
+	log.Info("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
 	go func() {
 		select {
 		case <-stop:
