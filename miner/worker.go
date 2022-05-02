@@ -430,8 +430,10 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		select {
 		case w.newWorkCh <- &newWorkReq{interrupt: interrupt, noempty: noempty, timestamp: timestamp}:
 		case <-w.exitCh:
+			log.Info("########## inner function commit --> return")
 			return
 		}
+		log.Info("########## inner function commit --> timer.Reset")
 		timer.Reset(recommit)
 		atomic.StoreInt32(&w.newTxs, 0)
 	}
@@ -449,28 +451,37 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 	for {
 		select {
 		case <-w.startCh:
+			log.Info("### newWorkLoop startCh")
 			clearPending(w.chain.CurrentBlock().NumberU64())
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
 		case head := <-w.chainHeadCh:
+			log.Info("### newWorkLoop chainHeadCh")
 			clearPending(head.Block.NumberU64())
 			timestamp = time.Now().Unix()
 			commit(false, commitInterruptNewHead)
 
 		case <-timer.C:
+			log.Info("### newWorkLoop timer.C")
 			// If sealing is running resubmit a new work cycle periodically to pull in
 			// higher priced transactions. Disable this overhead for pending blocks.
+			log.Info("### --> timer.C", "w.isRunning", w.isRunning(), "w.chainConfig.Clique", w.chainConfig.Clique, "w.chainConfig.Clique.Period", w.chainConfig.Clique.Period)
 			if w.isRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
 				// Short circuit if no new transaction arrives.
+				log.Info("###    --> atomic.LoadInt32", "&w.newTxs", &w.newTxs, "value", atomic.LoadInt32(&w.newTxs))
+				/*
 				if atomic.LoadInt32(&w.newTxs) == 0 {
 					timer.Reset(recommit)
 					continue
 				}
+				*/
+				log.Info("###    --> commit")
 				commit(true, commitInterruptResubmit)
 			}
 
 		case interval := <-w.resubmitIntervalCh:
+			log.Info("### newWorkLoop resubmitIntervalCh")
 			// Adjust resubmit interval explicitly by user.
 			if interval < minRecommitInterval {
 				log.Warn("Sanitizing miner recommit interval", "provided", interval, "updated", minRecommitInterval)
@@ -484,6 +495,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			}
 
 		case adjust := <-w.resubmitAdjustCh:
+			log.Info("### newWorkLoop resubmitAdjustCh")
 			// Adjust resubmit interval by feedback.
 			if adjust.inc {
 				before := recommit
@@ -526,9 +538,11 @@ func (w *worker) mainLoop() {
 	for {
 		select {
 		case req := <-w.newWorkCh:
+			log.Info("### newWorkCh")
 			w.commitWork(req.interrupt, req.noempty, req.timestamp)
 
 		case req := <-w.getWorkCh:
+			log.Info("### getWorkCh")
 			block, err := w.generateWork(req.params)
 			if err != nil {
 				req.err = err
@@ -538,6 +552,7 @@ func (w *worker) mainLoop() {
 			}
 
 		case ev := <-w.chainSideCh:
+			log.Info("### chainSideCh")
 			// Short circuit for duplicate side blocks
 			if _, exist := w.localUncles[ev.Block.Hash()]; exist {
 				continue
@@ -562,6 +577,7 @@ func (w *worker) mainLoop() {
 			}
 
 		case <-cleanTicker.C:
+			log.Info("### cleanTicker")
 			chainHead := w.chain.CurrentBlock()
 			for hash, uncle := range w.localUncles {
 				if uncle.NumberU64()+staleThreshold <= chainHead.NumberU64() {
@@ -575,6 +591,7 @@ func (w *worker) mainLoop() {
 			}
 
 		case ev := <-w.txsCh:
+			log.Info("### txsCh")
 			// Apply transactions to the pending state if we're not sealing
 			//
 			// Note all transactions received may not be continuous with transactions
@@ -641,25 +658,27 @@ func (w *worker) taskLoop() {
 	for {
 		select {
 		case task := <-w.taskCh:
+                        log.Info("taskLoop --> taskCh", "task", task)
 			if w.newTaskHook != nil {
 				w.newTaskHook(task)
 			}
 			// Reject duplicate sealing work due to resubmitting.
 			sealHash := w.engine.SealHash(task.block.Header())
+			log.Info("taskLoop --> sealHash", "prev", prev, "sealHash", sealHash)
 			if sealHash == prev {
 				continue
 			}
 			// Interrupt previous sealing operation
 			interrupt()
 			stopCh, prev = make(chan struct{}), sealHash
-
+                        log.Info("taskLoop --> skip?")
 			if w.skipSealHook != nil && w.skipSealHook(task) {
 				continue
 			}
 			w.pendingMu.Lock()
 			w.pendingTasks[sealHash] = task
 			w.pendingMu.Unlock()
-
+                        log.Info("taskLoop --> engine.Seal")
 			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh); err != nil {
 				log.Warn("Block sealing failed", "err", err)
 				w.pendingMu.Lock()
@@ -1130,19 +1149,24 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64) {
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
 func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+	log.Info("worker commit");
 	if w.isRunning() {
+		log.Info("worker isRunning!!!")
 		if interval != nil {
 			interval()
 		}
 		// Create a local environment copy, avoid the data race with snapshot state.
 		// https://github.com/ethereum/go-ethereum/issues/24299
+                log.Info("worker create local copy")
 		env := env.copy()
 		block, err := w.engine.FinalizeAndAssemble(w.chain, env.header, env.state, env.txs, env.unclelist(), env.receipts)
 		if err != nil {
 			return err
 		}
+		log.Info("worker post merge");
 		// If we're post merge, just ignore
 		if !w.isTTDReached(block.Header()) {
+			log.Info("worker message to Channel...")
 			select {
 			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
 				w.unconfirmed.Shift(block.NumberU64() - 1)
