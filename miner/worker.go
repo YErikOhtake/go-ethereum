@@ -445,7 +445,7 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 		}
 		w.pendingMu.Unlock()
 	}
-
+  count := 0
 	for {
 		select {
 		case <-w.startCh:
@@ -464,8 +464,14 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 			if w.isRunning() && (w.chainConfig.Clique == nil || w.chainConfig.Clique.Period > 0) {
 				// Short circuit if no new transaction arrives.
 				if atomic.LoadInt32(&w.newTxs) == 0 {
-					timer.Reset(recommit)
-					continue
+					count++
+					if count <= 10 {
+						log.Info("### newWorkLoop timer.C", "count", count)
+						timer.Reset(recommit)
+						continue
+					}
+					count = 0
+					timestamp = time.Now().Unix()
 				}
 				commit(true, commitInterruptResubmit)
 			}
