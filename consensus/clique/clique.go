@@ -622,10 +622,23 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		if recent == signer {
 			// Signer is among recents, only wait if the current block doesn't shift it out
 			// @dev ここを snap.Signers)/2 にする
+			if force == false {
+                                if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
+                                        log.Info("signed recently", "limit", limit, );
+                                        return errors.New("signed recently, must wait for others")
+                                }
+			} else {
+                                if limit := uint64(len(snap.Signers)/2); number < limit || seen > number-limit {
+                                        log.Info("signed recently", "limit", limit, );
+                                        return errors.New("signed recently, must wait for others")
+                                }
+			}
+			/*
 			if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
         log.Info("signed recently", "limit", limit, );
 				return errors.New("signed recently, must wait for others")
 			}
+			*/
 		}
 	}
 	// Sweet, the protocol permits us to sign the block, wait for our time
