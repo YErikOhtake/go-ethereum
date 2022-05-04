@@ -147,6 +147,7 @@ type task struct {
 	state     *state.StateDB
 	block     *types.Block
 	createdAt time.Time
+	force     bool
 }
 
 const (
@@ -574,7 +575,7 @@ func (w *worker) mainLoop() {
 			if w.isRunning() && w.current != nil && len(w.current.uncles) < 2 {
 				start := time.Now()
 				if err := w.commitUncle(w.current, ev.Block.Header()); err == nil {
-					w.commit(w.current.copy(), nil, true, start)
+					w.commit(w.current.copy(), nil, true, start, false)
 				}
 			}
 
@@ -681,7 +682,7 @@ func (w *worker) taskLoop() {
 			w.pendingTasks[sealHash] = task
 			w.pendingMu.Unlock()
                         log.Info("taskLoop --> engine.Seal")
-			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh, false); err != nil {
+			if err := w.engine.Seal(w.chain, task.block, w.resultCh, stopCh, task.force); err != nil {
 				log.Warn("Block sealing failed", "err", err)
 				w.pendingMu.Lock()
 				delete(w.pendingTasks, sealHash)
@@ -1134,11 +1135,11 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64, for
 	// Create an empty block based on temporary copied state for
 	// sealing in advance without waiting block execution finished.
 	if !noempty && atomic.LoadUint32(&w.noempty) == 0 {
-		w.commit(work.copy(), nil, false, start)
+		w.commit(work.copy(), nil, false, start, force)
 	}
 	// Fill pending transactions from the txpool
 	w.fillTransactions(interrupt, work)
-	w.commit(work.copy(), w.fullTaskHook, true, start)
+	w.commit(work.copy(), w.fullTaskHook, true, start, force)
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.
@@ -1152,7 +1153,7 @@ func (w *worker) commitWork(interrupt *int32, noempty bool, timestamp int64, for
 // and commits new work if consensus engine is running.
 // Note the assumption is held that the mutation is allowed to the passed env, do
 // the deep copy first.
-func (w *worker) commit(env *environment, interval func(), update bool, start time.Time) error {
+func (w *worker) commit(env *environment, interval func(), update bool, start time.Time, force bool) error {
 	log.Info("worker commit");
 	if w.isRunning() {
 		log.Info("worker isRunning!!!")
@@ -1172,7 +1173,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		if !w.isTTDReached(block.Header()) {
 			log.Info("worker message to Channel...")
 			select {
-			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now()}:
+			case w.taskCh <- &task{receipts: env.receipts, state: env.state, block: block, createdAt: time.Now(), force: force}:
 				w.unconfirmed.Shift(block.NumberU64() - 1)
 				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
 					"uncles", len(env.uncles), "txs", env.tcount,

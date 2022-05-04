@@ -618,7 +618,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
         log.Info("Seal check recent signers...", "number", number)
 	// If we're amongst the recent signers, wait for the next block
 	for seen, recent := range snap.Recents {
-    log.Info("Seal signer seen recent", "signer", signer, "seen", seen, "recent", recent)
+    log.Info("Seal signer seen recent", "signer", signer, "seen", seen, "recent", recent, "force", force)
 		if recent == signer {
 			// Signer is among recents, only wait if the current block doesn't shift it out
 			// @dev ここを snap.Signers)/2 にする
@@ -630,7 +630,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 			} else {
                                 if limit := uint64(len(snap.Signers)/2); number < limit || seen > number-limit {
                                         log.Info("signed recently", "limit", limit, );
-                                        return errors.New("signed recently, must wait for others")
+                                        return errors.New("force!!! signed recently, must wait for others")
                                 }
 			}
 			/*
