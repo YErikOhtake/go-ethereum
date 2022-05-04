@@ -222,6 +222,7 @@ func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 		if _, ok := snap.Signers[signer]; !ok {
 			return nil, errUnauthorizedSigner
 		}
+		// @dev ここのエラーを無視する
 		for _, recent := range snap.Recents {
 			if recent == signer {
 				return nil, errRecentlySigned
