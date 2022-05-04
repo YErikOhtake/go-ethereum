@@ -346,7 +346,7 @@ func (c *Clique) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		return err
 	}
 	// Retrieve the snapshot needed to verify this header and cache it
-	snap, err := c.snapshot(chain, number-1, header.ParentHash, parents)
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, parents, false)
 	if err != nil {
 		return err
 	}
@@ -366,7 +366,7 @@ func (c *Clique) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 }
 
 // snapshot retrieves the authorization snapshot at a given point in time.
-func (c *Clique) snapshot(chain consensus.ChainHeaderReader, number uint64, hash common.Hash, parents []*types.Header) (*Snapshot, error) {
+func (c *Clique) snapshot(chain consensus.ChainHeaderReader, number uint64, hash common.Hash, parents []*types.Header, force bool) (*Snapshot, error) {
 	// Search for a snapshot in memory or on disk for checkpoints
 	var (
 		headers []*types.Header
@@ -430,7 +430,7 @@ func (c *Clique) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 	for i := 0; i < len(headers)/2; i++ {
 		headers[i], headers[len(headers)-1-i] = headers[len(headers)-1-i], headers[i]
 	}
-	snap, err := snap.apply(headers)
+	snap, err := snap.apply(headers, force)
 	if err != nil {
 		return nil, err
 	}
@@ -496,14 +496,14 @@ func (c *Clique) verifySeal(snap *Snapshot, header *types.Header, parents []*typ
 
 // Prepare implements consensus.Engine, preparing all the consensus fields of the
 // header for running the transactions on top.
-func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header, force bool) error {
 	// If the block isn't a checkpoint, cast a random vote (good enough for now)
 	header.Coinbase = common.Address{}
 	header.Nonce = types.BlockNonce{}
 
 	number := header.Number.Uint64()
 	// Assemble the voting snapshot to check which votes make sense
-	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil)
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil, force)
 	if err != nil {
 		return err
 	}
@@ -589,8 +589,8 @@ func (c *Clique) Authorize(signer common.Address, signFn SignerFn) {
 
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
-func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
-	log.info("Seal --> begin")
+func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}, force bool) error {
+	log.Info("Seal --> begin")
 	header := block.Header()
 
 	// Sealing the genesis block is not supported
@@ -608,21 +608,37 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	c.lock.RUnlock()
 
 	// Bail out if we're unauthorized to sign a block
-	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil)
+	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil, force)
 	if err != nil {
 		return err
 	}
 	if _, authorized := snap.Signers[signer]; !authorized {
 		return errUnauthorizedSigner
 	}
-	log.info("Seal snap.Recents", snap.Recents)
+        log.Info("Seal check recent signers...", "number", number)
 	// If we're amongst the recent signers, wait for the next block
 	for seen, recent := range snap.Recents {
+    log.Info("Seal signer seen recent", "signer", signer, "seen", seen, "recent", recent, "force", force)
 		if recent == signer {
 			// Signer is among recents, only wait if the current block doesn't shift it out
+			// @dev ここを snap.Signers)/2 にする
+			if force == false {
+                                if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
+                                        log.Info("signed recently", "limit", limit, );
+                                        return errors.New("signed recently, must wait for others")
+                                }
+			} else {
+                                if limit := uint64(len(snap.Signers)/2); number < limit || seen > number-limit {
+                                        log.Info("signed recently", "limit", limit, );
+                                        return errors.New("force!!! signed recently, must wait for others")
+                                }
+			}
+			/*
 			if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
+        log.Info("signed recently", "limit", limit, );
 				return errors.New("signed recently, must wait for others")
 			}
+			*/
 		}
 	}
 	// Sweet, the protocol permits us to sign the block, wait for our time
@@ -632,7 +648,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		wiggle := time.Duration(len(snap.Signers)/2+1) * wiggleTime
 		delay += time.Duration(rand.Int63n(int64(wiggle)))
 
-		log.Trace("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggle))
+		log.Info("Out-of-turn signing requested", "wiggle", common.PrettyDuration(wiggle))
 	}
 	// Sign all the things!
 	sighash, err := signFn(accounts.Account{Address: signer}, accounts.MimetypeClique, CliqueRLP(header))
@@ -641,8 +657,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	}
 	copy(header.Extra[len(header.Extra)-extraSeal:], sighash)
 	// Wait until sealing is terminated or delay timeout.
-	log.info("Seal --> 2")
-	log.Trace("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
+	log.Info("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
 	go func() {
 		select {
 		case <-stop:
@@ -657,7 +672,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		}
 	}()
 
-	log.info("Seal --> end")
+	log.Info("Seal --> end")
 	return nil
 }
 
@@ -666,7 +681,7 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 // * DIFF_NOTURN(2) if BLOCK_NUMBER % SIGNER_COUNT != SIGNER_INDEX
 // * DIFF_INTURN(1) if BLOCK_NUMBER % SIGNER_COUNT == SIGNER_INDEX
 func (c *Clique) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, parent *types.Header) *big.Int {
-	snap, err := c.snapshot(chain, parent.Number.Uint64(), parent.Hash(), nil)
+	snap, err := c.snapshot(chain, parent.Number.Uint64(), parent.Hash(), nil, false)
 	if err != nil {
 		return nil
 	}

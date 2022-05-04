@@ -182,7 +182,8 @@ func (s *Snapshot) uncast(address common.Address, authorize bool) bool {
 
 // apply creates a new authorization snapshot by applying the given headers to
 // the original one.
-func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
+func (s *Snapshot) apply(headers []*types.Header, force bool) (*Snapshot, error) {
+	log.Info("##### snapshot.apply", "force", force)
 	// Allow passing in no headers for cleaner code
 	if len(headers) == 0 {
 		return s, nil
@@ -222,9 +223,13 @@ func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 		if _, ok := snap.Signers[signer]; !ok {
 			return nil, errUnauthorizedSigner
 		}
+		// @dev ここのエラーを無視する
 		for _, recent := range snap.Recents {
 			if recent == signer {
-				return nil, errRecentlySigned
+				if force == false {
+					return nil, errRecentlySigned
+				}
+				// return nil, errRecentlySigned
 			}
 		}
 		snap.Recents[number] = signer

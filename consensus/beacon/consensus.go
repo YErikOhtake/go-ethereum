@@ -250,14 +250,14 @@ func (beacon *Beacon) verifyHeaders(chain consensus.ChainHeaderReader, headers [
 
 // Prepare implements consensus.Engine, initializing the difficulty field of a
 // header to conform to the beacon protocol. The changes are done inline.
-func (beacon *Beacon) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+func (beacon *Beacon) Prepare(chain consensus.ChainHeaderReader, header *types.Header, force bool) error {
 	// Transition isn't triggered yet, use the legacy rules for preparation.
 	reached, err := IsTTDReached(chain, header.ParentHash, header.Number.Uint64()-1)
 	if err != nil {
 		return err
 	}
 	if !reached {
-		return beacon.ethone.Prepare(chain, header)
+		return beacon.ethone.Prepare(chain, header, force)
 	}
 	header.Difficulty = beaconDifficulty
 	return nil
@@ -294,9 +294,9 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 //
 // Note, the method returns immediately and will send the result async. More
 // than one result may also be returned depending on the consensus algorithm.
-func (beacon *Beacon) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
+func (beacon *Beacon) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}, force bool) error {
 	if !beacon.IsPoSHeader(block.Header()) {
-		return beacon.ethone.Seal(chain, block, results, stop)
+		return beacon.ethone.Seal(chain, block, results, stop, force)
 	}
 	// The seal verification is done by the external consensus engine,
 	// return directly without pushing any block back. In another word
